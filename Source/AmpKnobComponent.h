@@ -109,12 +109,7 @@ public:
         const float s = juce::jmin (knobArea.getWidth(), knobArea.getHeight());
         auto knobFaceArea = juce::Rectangle<float> (0, 0, s, s).withCentre (knobArea.getCentre());
         
-        auto c = knobFaceArea.getCentre();
-        float radius = knobFaceArea.getWidth() * 0.40f; // tune if needed
-        
-        g.fillEllipse (knobFaceArea);
-        g.drawEllipse (knobFaceArea, 2.0f);
-            
+        // No circle border - knob image is drawn directly by LookAndFeel
         // Let JUCE handle default painting - we only customize the slider via LookAndFeel
         Component::paint (g);
     }

@@ -292,6 +292,7 @@ GainForgeAudioProcessor::GainForgeAudioProcessor()
     rectifierModeParam = apvts.getRawParameterValue("RECTIFIER_MODE");
     voiceParam = apvts.getRawParameterValue("VOICE");
     modeParam = apvts.getRawParameterValue("MODE");
+    bypassParam = apvts.getRawParameterValue("BYPASS");
 }
 
 GainForgeAudioProcessor::~GainForgeAudioProcessor()
@@ -410,6 +411,11 @@ void GainForgeAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     // Clear unused output channels
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
+
+    // Check bypass state - if bypassed, pass audio through unchanged
+    bool bypassed = bypassParam && bypassParam->load() > 0.5f;
+    if (bypassed)
+        return; // Pass audio through unchanged
 
     // Get parameter values
     float gain = gainParam->load();
@@ -542,6 +548,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout GainForgeAudioProcessor::cre
         juce::ParameterID ("MODE", 1), "Mode",
         juce::StringArray { "Cln", "Cru", "Mod" },
         2 // Default to Mod
+    ));
+
+    // Bypass: Toggle plugin on/off
+    params.push_back (std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID ("BYPASS", 1), "Bypass",
+        false // Default to not bypassed (plugin on)
     ));
 
     return { params.begin(), params.end() };

@@ -11,6 +11,109 @@
 #include <cmath>
 
 //==============================================================================
+namespace
+{
+    static juce::Rectangle<int> findAlphaBounds(const juce::Image& img)
+    {
+        const int w = img.getWidth();
+        const int h = img.getHeight();
+
+        int minX = w, minY = h, maxX = -1, maxY = -1;
+
+        for (int y = 0; y < h; ++y)
+        {
+            for (int x = 0; x < w; ++x)
+            {
+                if (img.getPixelAt(x, y).getAlpha() > 8)
+                {
+                    minX = juce::jmin(minX, x);
+                    minY = juce::jmin(minY, y);
+                    maxX = juce::jmax(maxX, x);
+                    maxY = juce::jmax(maxY, y);
+                }
+            }
+        }
+
+        if (maxX < minX || maxY < minY)
+            return { 0, 0, w, h };
+
+        return { minX, minY, (maxX - minX + 1), (maxY - minY + 1) };
+    }
+
+    static juce::Image makeCenteredSquareKnob(const juce::Image& src)
+    {
+        if (!src.isValid())
+            return src;
+
+        // Ensure ARGB
+        juce::Image img = (src.getFormat() == juce::Image::ARGB) ? src : src.convertedToFormat(juce::Image::ARGB);
+
+        // Tight crop to visible pixels (removes uneven padding that causes "shift")
+        auto bounds = findAlphaBounds(img);
+        auto cropped = img.getClippedImage(bounds);
+
+        // Make a square canvas and draw the cropped knob centered
+        const int outSize = juce::jmax(cropped.getWidth(), cropped.getHeight());
+        juce::Image out(juce::Image::ARGB, outSize, outSize, true);
+
+        juce::Graphics g(out);
+        g.setImageResamplingQuality(juce::Graphics::highResamplingQuality);
+
+        const int dx = (outSize - cropped.getWidth()) / 2;
+        const int dy = (outSize - cropped.getHeight()) / 2;
+        g.drawImageAt(cropped, dx, dy);
+
+        return out;
+    }
+
+    static float detectPointerAngleFromKnobPng(const juce::Image& knob)
+    {
+        if (!knob.isValid())
+            return -juce::MathConstants<float>::halfPi;
+
+        const int w = knob.getWidth();
+        const int h = knob.getHeight();
+        const float cx = w * 0.5f;
+        const float cy = h * 0.5f;
+
+        double sumX = 0.0, sumY = 0.0;
+        int count = 0;
+
+        const float rMin = juce::jmin(w, h) * 0.20f;
+        const float rMax = juce::jmin(w, h) * 0.48f;
+
+        for (int y = 0; y < h; ++y)
+        {
+            for (int x = 0; x < w; ++x)
+            {
+                auto c = knob.getPixelAt(x, y);
+                if (c.getAlpha() < 20) continue;
+
+                const float dx = x - cx;
+                const float dy = y - cy;
+                const float r = std::sqrt(dx*dx + dy*dy);
+                if (r < rMin || r > rMax) continue;
+
+                // "white-ish" pointer pixels
+                const int lum = (int)(0.2126f*c.getRed() + 0.7152f*c.getGreen() + 0.0722f*c.getBlue());
+                if (lum < 230) continue;
+
+                sumX += x;
+                sumY += y;
+                ++count;
+            }
+        }
+
+        if (count < 8)
+            return -juce::MathConstants<float>::halfPi;
+
+        const float px = (float)(sumX / count);
+        const float py = (float)(sumY / count);
+        return std::atan2(py - cy, px - cx);
+    }
+}
+
+//==============================================================================
 GainForgeAudioProcessorEditor::GainForgeAudioProcessorEditor (GainForgeAudioProcessor& p)
     : AudioProcessorEditor (&p), audioProcessor (p)
 {
@@ -24,26 +127,50 @@ GainForgeAudioProcessorEditor::GainForgeAudioProcessorEditor (GainForgeAudioProc
     // Optional: if you added an aspect-ratio constrainer earlier, you can leave it,
     // but it won't matter when resizable is false.
 
-    // Try to load knob filmstrip from BinaryData (if available)
-    // If not available, FilmstripLookAndFeel will use fallback metallic rendering
-    #ifdef BinaryData_knob_strip_png
-    knobFilmstrip = juce::ImageFileFormat::loadFrom (BinaryData::knob_strip_png,
-                                                      BinaryData::knob_strip_pngSize);
-    if (knobFilmstrip.isValid())
-    {
-        redKnobLnf.setFilmstrip (knobFilmstrip, 128, true);
-        blueKnobLnf.setFilmstrip (knobFilmstrip, 128, true);
-    }
-    #endif
+    // Load single knob image from BinaryData
+    auto rawKnob = juce::ImageCache::getFromMemory(BinaryData::knob_strip_png,
+                                                   BinaryData::knob_strip_pngSize);
 
-    // Create knobs - GAIN and MASTER use red LookAndFeel, others use blue
+    auto knobImg = makeCenteredSquareKnob(rawKnob);
+    const float pointerAngle = detectPointerAngleFromKnobPng(knobImg);
+
+    knobLnf = std::make_unique<KnobImageLNF>(knobImg, pointerAngle);
+
+    // Create knobs - all use the same KnobImageLNF
     // Create them first, then add to editor to avoid JUCE accessing them during construction
-    gainKnob     = std::make_unique<AmpKnobComponent> ("GAIN",     redKnobLnf);
-    bassKnob     = std::make_unique<AmpKnobComponent> ("BASS",     blueKnobLnf);
-    midKnob      = std::make_unique<AmpKnobComponent> ("MID",      blueKnobLnf);
-    trebleKnob   = std::make_unique<AmpKnobComponent> ("TREBLE",   blueKnobLnf);
-    presenceKnob = std::make_unique<AmpKnobComponent> ("PRESENCE", blueKnobLnf);
-    masterKnob   = std::make_unique<AmpKnobComponent> ("MASTER",   redKnobLnf);
+    // We'll apply the LookAndFeel after creation since AmpKnobComponent requires a LookAndFeel reference
+    FilmstripLookAndFeel tempLnf; // Temporary for construction
+    gainKnob     = std::make_unique<AmpKnobComponent> ("GAIN",     tempLnf);
+    bassKnob     = std::make_unique<AmpKnobComponent> ("BASS",     tempLnf);
+    midKnob      = std::make_unique<AmpKnobComponent> ("MID",      tempLnf);
+    trebleKnob   = std::make_unique<AmpKnobComponent> ("TREBLE",   tempLnf);
+    presenceKnob = std::make_unique<AmpKnobComponent> ("PRESENCE", tempLnf);
+    masterKnob   = std::make_unique<AmpKnobComponent> ("MASTER",   tempLnf);
+
+    // Apply KnobImageLNF to all knobs
+    if (knobLnf)
+    {
+        auto& gain = gainKnob->getSlider();
+        auto& bass = bassKnob->getSlider();
+        auto& mid = midKnob->getSlider();
+        auto& treble = trebleKnob->getSlider();
+        auto& presence = presenceKnob->getSlider();
+        auto& master = masterKnob->getSlider();
+        
+        gain.setName("Gain");
+        bass.setName("Bass");
+        mid.setName("Mid");
+        treble.setName("Treble");
+        presence.setName("Presence");
+        master.setName("Master");
+        
+        for (auto* s : { &gain, &bass, &mid, &treble, &presence, &master })
+        {
+            s->setLookAndFeel(knobLnf.get());
+            s->setSliderStyle(juce::Slider::RotaryHorizontalVerticalDrag);
+            s->setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+        }
+    }
 
     // Create toggles
     voiceToggle = std::make_unique<ThreeWayToggle> ("VOICE", "RAW", "MID", "MOD");
@@ -51,6 +178,27 @@ GainForgeAudioProcessorEditor::GainForgeAudioProcessorEditor (GainForgeAudioProc
 
     modeToggle = std::make_unique<ThreeWayToggle> ("MODE", "CLN", "CRU", "MOD");
     addAndMakeVisible (*modeToggle);
+
+    // Create power LED
+    powerLed = std::make_unique<PowerLed>();
+    addAndMakeVisible (*powerLed);
+    
+    // Set initial LED state based on bypass parameter (LED on = plugin not bypassed)
+    auto* bypassParam = audioProcessor.apvts.getRawParameterValue("BYPASS");
+    bool bypassed = bypassParam && bypassParam->load() > 0.5f;
+    powerLed->setOn(!bypassed); // LED on when not bypassed
+    
+    // Connect LED toggle to bypass parameter
+    powerLed->onToggle = [&](bool isOn)
+    {
+        auto* bypassParam = audioProcessor.apvts.getRawParameterValue("BYPASS");
+        if (bypassParam)
+        {
+            // LED on = plugin active (not bypassed), LED off = bypassed
+            float bypassValue = isOn ? 0.0f : 1.0f;
+            bypassParam->store(bypassValue);
+        }
+    };
 
     // Add components but keep them hidden until fully initialized
     // This prevents JUCE 8 from calling resized()/paint() during construction
@@ -193,46 +341,33 @@ GainForgeAudioProcessorEditor::~GainForgeAudioProcessorEditor()
         hs.attachment.reset(); // Explicitly reset attachment
     }
     
-    // Clear LookAndFeel references BEFORE removing components
-    // Red knobs (GAIN, MASTER)
-    if (gainKnob)
+    // Clear LookAndFeel from all knobs
+    if (gainKnob && bassKnob && midKnob && trebleKnob && presenceKnob && masterKnob)
     {
-        gainKnob->getSlider().setLookAndFeel (nullptr);
-        gainKnob->getSlider().onValueChange = nullptr;
-    }
-    if (masterKnob)
-    {
-        masterKnob->getSlider().setLookAndFeel (nullptr);
-        masterKnob->getSlider().onValueChange = nullptr;
+        auto& gain = gainKnob->getSlider();
+        auto& bass = bassKnob->getSlider();
+        auto& mid = midKnob->getSlider();
+        auto& treble = trebleKnob->getSlider();
+        auto& presence = presenceKnob->getSlider();
+        auto& master = masterKnob->getSlider();
+        
+        for (auto* s : { &gain, &bass, &mid, &treble, &presence, &master })
+            s->setLookAndFeel(nullptr);
     }
     
-    // Blue knobs (BASS, MID, TREBLE, PRESENCE)
-    if (bassKnob)
-    {
-        bassKnob->getSlider().setLookAndFeel (nullptr);
-        bassKnob->getSlider().onValueChange = nullptr;
-    }
-    if (midKnob)
-    {
-        midKnob->getSlider().setLookAndFeel (nullptr);
-        midKnob->getSlider().onValueChange = nullptr;
-    }
-    if (trebleKnob)
-    {
-        trebleKnob->getSlider().setLookAndFeel (nullptr);
-        trebleKnob->getSlider().onValueChange = nullptr;
-    }
-    if (presenceKnob)
-    {
-        presenceKnob->getSlider().setLookAndFeel (nullptr);
-        presenceKnob->getSlider().onValueChange = nullptr;
-    }
+    // Clear KnobImageLNF reference
+    if (knobLnf)
+        knobLnf.reset();
     
     // Clear toggle callbacks
     if (voiceToggle)
         voiceToggle->onChange = nullptr;
     if (modeToggle)
         modeToggle->onChange = nullptr;
+    
+    // Clear power LED callback
+    if (powerLed)
+        powerLed->onToggle = nullptr;
     
     // Reset all attachments BEFORE removing components
     gainAttachment.reset();
@@ -256,10 +391,10 @@ GainForgeAudioProcessorEditor::~GainForgeAudioProcessorEditor()
     masterKnob.reset();
     voiceToggle.reset();
     modeToggle.reset();
+    powerLed.reset();
     
     // Clear images
     panelImage = {};
-    knobFilmstrip = {};
 }
 
 //==============================================================================
@@ -455,6 +590,30 @@ void GainForgeAudioProcessorEditor::paint (juce::Graphics& g)
     g.drawFittedText ("HIGH GAIN AMPLIFIER",
                       titleBlock.toNearestInt(),
                       juce::Justification::centred, 1);
+
+    // ---- POWER label (true visual centering with LED) ----
+    if (powerLed != nullptr)
+    {
+        auto led = powerLed->getBounds().toFloat();
+
+        // Text rect uses SAME height as LED → perfect centering
+        juce::Rectangle<float> textArea(
+            led.getRight() + 10.0f,  // spacing from LED
+            led.getY(),              // same top as LED
+            120.0f,                  // enough width for POWER
+            led.getHeight()           // EXACT same height
+        );
+
+        g.setColour(juce::Colour::fromRGB(180, 180, 180));
+        g.setFont(juce::Font(getHeight() * 0.018f, juce::Font::bold));
+
+        g.drawFittedText(
+            "POWER",
+            textArea.toNearestInt(),
+            juce::Justification::centredLeft,  // centers vertically + left aligned
+            1
+        );
+    }
 }
 
 void GainForgeAudioProcessorEditor::resized()
@@ -465,7 +624,7 @@ void GainForgeAudioProcessorEditor::resized()
 
     // Validate components exist
     if (!gainKnob || !bassKnob || !midKnob || !trebleKnob || !presenceKnob || !masterKnob ||
-        !voiceToggle || !modeToggle)
+        !voiceToggle || !modeToggle || !powerLed)
         return;
 
     // Panel fills window (cover mode with limited top/bottom crop) - same as paint()
@@ -532,4 +691,19 @@ void GainForgeAudioProcessorEditor::resized()
 
     setToggle (*voiceToggle, 1);
     setToggle (*modeToggle,  4);
+
+    // ---- POWER LED placement (smaller, still with glow room) ----
+    auto b = getLocalBounds().toFloat();
+
+    // Small, realistic hardware LED size
+    const int powerBox = 32;                 // ⬅️ reduced from 44
+    const float powerX = b.getWidth()  * 0.075f;
+    const float powerY = b.getHeight() * 0.165f;
+
+    powerLed->setBounds(
+        (int)powerX,
+        (int)powerY,
+        powerBox,
+        powerBox
+    );
 }

@@ -16,6 +16,7 @@
       <FILE id="uzM97Y" name="PluginEditor.h" compile="0" resource="0" file="Source/PluginEditor.h"/>
     </GROUP>
     <GROUP id="{RESOURCE_GROUP}" name="Resources">
+      <FILE id="oEcuUL" name="knob_strip.png" compile="0" resource="1" file="../../Desktop/knob_strip.png"/>
       <FILE id="fJXuqA" name="panel_bg.png" compile="0" resource="1" file="../../Desktop/panel_bg.png"/>
     </GROUP>
   </MAINGROUP>

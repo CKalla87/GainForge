@@ -72,6 +72,7 @@ public:
     std::atomic<float>* rectifierModeParam = nullptr; // 0.0 = Silicon, 1.0 = Tube
     std::atomic<float>* voiceParam = nullptr; // 0.0 = Raw, 0.5 = Mid, 1.0 = Mod
     std::atomic<float>* modeParam = nullptr;  // 0.0 = Cln, 0.5 = Cru, 1.0 = Mod
+    std::atomic<float>* bypassParam = nullptr; // 0.0 = not bypassed (on), 1.0 = bypassed (off)
 
 private:
     //==============================================================================

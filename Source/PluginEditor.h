@@ -14,6 +14,8 @@
 #include "AmpKnobComponent.h"
 #include "ThreePositionToggle.h"
 #include "ThreePositionToggleAttachment.h"
+#include "PowerLed.h"
+#include "KnobImageLNF.h"
 #include "ImageWithFallback.h"
 #include "TextUtilities.h"
 
@@ -38,10 +40,8 @@ private:
     std::atomic<bool> isEditorValid { true }; // Guard against operations during destruction
     std::atomic<bool> isFullyInitialized { false }; // Guard against resized() during construction
 
-    // Look and feel for knobs (red for GAIN/MASTER, blue for others)
-    FilmstripLookAndFeel redKnobLnf;
-    FilmstripLookAndFeel blueKnobLnf;
-    juce::Image knobFilmstrip; // Optional: load from BinaryData if available
+    // Look and feel for knobs
+    std::unique_ptr<KnobImageLNF> knobLnf;
     juce::Image panelImage; // Background panel image
     juce::Rectangle<float> panelDrawArea;
 
@@ -56,6 +56,9 @@ private:
     // Toggle switches
     std::unique_ptr<ThreeWayToggle> voiceToggle;
     std::unique_ptr<ThreeWayToggle> modeToggle;
+
+    // Power LED
+    std::unique_ptr<PowerLed> powerLed;
 
     // APVTS attachments
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> gainAttachment;
