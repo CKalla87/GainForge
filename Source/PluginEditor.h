@@ -10,6 +10,12 @@
 
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
+#include "FilmstripLookAndFeel.h"
+#include "AmpKnobComponent.h"
+#include "ThreePositionToggle.h"
+#include "ThreePositionToggleAttachment.h"
+#include "ImageWithFallback.h"
+#include "TextUtilities.h"
 
 //==============================================================================
 /**
@@ -25,57 +31,76 @@ public:
     void resized() override;
 
 private:
-    // This reference is provided as a quick way for your editor to
-    // access the processor object that created it.
+    //==============================================================================
+    // GAINFORGE Panel Handling
+    void loadPanelBackground();
     GainForgeAudioProcessor& audioProcessor;
+    std::atomic<bool> isEditorValid { true }; // Guard against operations during destruction
+    std::atomic<bool> isFullyInitialized { false }; // Guard against resized() during construction
 
-    // Metal-themed colors
-    juce::Colour metalBlack = juce::Colour::fromFloatRGBA (0.05f, 0.05f, 0.05f, 1.0f);
-    juce::Colour metalDark = juce::Colour::fromFloatRGBA (0.15f, 0.15f, 0.15f, 1.0f);
-    juce::Colour metalSilver = juce::Colour::fromFloatRGBA (0.7f, 0.7f, 0.7f, 1.0f);
-    juce::Colour metalOrange = juce::Colour::fromFloatRGBA (1.0f, 0.4f, 0.0f, 1.0f);
-    juce::Colour metalRed = juce::Colour::fromFloatRGBA (0.8f, 0.2f, 0.1f, 1.0f);
-    juce::Colour metalGray = juce::Colour::fromFloatRGBA (0.3f, 0.3f, 0.3f, 1.0f);
-    juce::Colour metalText = juce::Colour::fromFloatRGBA (0.9f, 0.9f, 0.9f, 1.0f);
+    // Look and feel for knobs (red for GAIN/MASTER, blue for others)
+    FilmstripLookAndFeel redKnobLnf;
+    FilmstripLookAndFeel blueKnobLnf;
+    juce::Image knobFilmstrip; // Optional: load from BinaryData if available
+    juce::Image panelImage; // Background panel image
+    juce::Rectangle<float> panelDrawArea;
 
-    // Controls
-    juce::Slider gainSlider;
-    juce::Slider bassSlider;
-    juce::Slider midSlider;
-    juce::Slider trebleSlider;
-    juce::Slider presenceSlider;
-    juce::Slider masterSlider;
-    juce::Slider driveSlider;
-    
-    juce::Label gainLabel;
-    juce::Label bassLabel;
-    juce::Label midLabel;
-    juce::Label trebleLabel;
-    juce::Label presenceLabel;
-    juce::Label masterLabel;
-    juce::Label driveLabel;
-    juce::Label titleLabel;
-    juce::Label rectifierLabel;
-    
-    // Rectifier mode toggle button
-    juce::TextButton rectifierButton;
-    
-    // Attachments
+    // Knob components (0-10 range, will map to 0-1.0 for parameters)
+    std::unique_ptr<AmpKnobComponent> gainKnob;
+    std::unique_ptr<AmpKnobComponent> bassKnob;
+    std::unique_ptr<AmpKnobComponent> midKnob;
+    std::unique_ptr<AmpKnobComponent> trebleKnob;
+    std::unique_ptr<AmpKnobComponent> presenceKnob;
+    std::unique_ptr<AmpKnobComponent> masterKnob;
+
+    // Toggle switches
+    std::unique_ptr<ThreeWayToggle> voiceToggle;
+    std::unique_ptr<ThreeWayToggle> modeToggle;
+
+    // APVTS attachments
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> gainAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> bassAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> midAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> trebleAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> presenceAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> masterAttachment;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> driveAttachment;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> rectifierAttachment;
-    
-    void setupSlider (juce::Slider& slider, juce::Label& label, const juce::String& labelText);
-    void drawAmpHead (juce::Graphics& g);
-    void drawGrille (juce::Graphics& g, juce::Rectangle<int> bounds);
-    void drawKnob (juce::Graphics& g, juce::Rectangle<int> bounds, float value, const juce::String& label);
-    void drawAmpChassis (juce::Graphics& g, juce::Rectangle<int> bounds);
+
+    std::unique_ptr<ThreePositionToggleAttachment> voiceAttachment;
+    std::unique_ptr<ThreePositionToggleAttachment> modeAttachment;
+
+    // Hidden sliders for parameter binding (parameters use 0-1.0, knobs use 0-10)
+    struct HiddenSlider
+    {
+        std::unique_ptr<juce::Slider> slider;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
+        AmpKnobComponent* knobComponent = nullptr; // Store pointer for lambda access
+        std::atomic<bool> isInitializing { false }; // Flag to prevent callback loops during init
+
+        HiddenSlider()
+            : slider (std::make_unique<juce::Slider>())
+        {
+        }
+
+        ~HiddenSlider()
+        {
+            // Clear callbacks to prevent accessing deleted objects
+            if (slider)
+                slider->onValueChange = nullptr;
+            if (knobComponent)
+                knobComponent->getSlider().onValueChange = nullptr;
+        }
+        
+        // Default move operations work fine with unique_ptr
+        HiddenSlider (HiddenSlider&&) noexcept = default;
+        HiddenSlider& operator= (HiddenSlider&&) noexcept = default;
+        
+        // Can't copy because of unique_ptr
+        HiddenSlider (const HiddenSlider&) = delete;
+        HiddenSlider& operator= (const HiddenSlider&) = delete;
+    };
+
+    // Use array - objects are constructed in place
+    std::array<HiddenSlider, 6> hiddenSliders;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (GainForgeAudioProcessorEditor)
 };
-

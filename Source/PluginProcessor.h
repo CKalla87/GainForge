@@ -70,6 +70,8 @@ public:
     std::atomic<float>* masterParam = nullptr;
     std::atomic<float>* driveParam = nullptr;
     std::atomic<float>* rectifierModeParam = nullptr; // 0.0 = Silicon, 1.0 = Tube
+    std::atomic<float>* voiceParam = nullptr; // 0.0 = Raw, 0.5 = Mid, 1.0 = Mod
+    std::atomic<float>* modeParam = nullptr;  // 0.0 = Cln, 0.5 = Cru, 1.0 = Mod
 
 private:
     //==============================================================================
@@ -82,7 +84,8 @@ private:
         void reset();
         void processBlock (juce::AudioBuffer<float>& buffer, 
                           float gain, float bass, float mid, float treble, 
-                          float presence, float master, float drive, float rectifierMode);
+                          float presence, float master, float drive, float rectifierMode,
+                          float voice, float mode);
         
     private:
         // Tone stack filters

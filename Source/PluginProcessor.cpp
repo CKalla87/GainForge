@@ -42,7 +42,7 @@ void GainForgeAudioProcessor::AmpEmulator::prepare (double sampleRate, int maxBl
     trebleFilter.prepare (spec);
     presenceFilter.prepare (spec);
     
-    // Reset smoothed values
+    // Reset smoothed values (prevents loud pops on load - default parameters are now 0.0)
     smoothedGain.reset (sampleRate, 0.05);
     smoothedBass.reset (sampleRate, 0.05);
     smoothedMid.reset (sampleRate, 0.05);
@@ -53,7 +53,7 @@ void GainForgeAudioProcessor::AmpEmulator::prepare (double sampleRate, int maxBl
     smoothedRectifierMode.reset (sampleRate, 0.1);
     rectifierSagState = 0.0f;
     
-    // Initialize filters
+    // Initialize filters with safe defaults (EQ at neutral, gain-related at 0.0)
     updateFilters (0.5f, 0.5f, 0.5f, 0.5f);
 }
 
@@ -67,77 +67,79 @@ void GainForgeAudioProcessor::AmpEmulator::reset()
 
 void GainForgeAudioProcessor::AmpEmulator::updateFilters (float bass, float mid, float treble, float presence)
 {
-    // Mesa Boogie Triple Rectifier tone stack frequencies
-    // Bass: Low shelf at 80Hz (typical Rectifier bass control)
+    // Mesa Boogie Triple Rectifier tone stack frequencies (authentic values)
+    // Bass: Low shelf at 80Hz - very powerful low end
     auto bassCoeffs = juce::dsp::IIR::Coefficients<float>::makeLowShelf (
         currentSampleRate, 80.0, 0.707, 
-        juce::jmap (bass, 0.2f, 2.5f) // 0.0 -> 0.2x, 1.0 -> 2.5x (Rectifier has powerful bass)
+        juce::jmap (bass, 0.12f, 4.2f) // 0.0 -> 0.12x, 1.0 -> 4.2x (massive bass boost capability)
     );
     *bassFilter.coefficients = *bassCoeffs;
     
-    // Mid: Peaking at 750Hz with wider Q for scooped mids (Rectifier characteristic)
+    // Mid: Peaking at 800Hz with wider Q for classic scooped mids (Rectifier signature)
+    // Rectifier mids can go very low (scooped) - this is the key to the Rectifier sound
     auto midCoeffs = juce::dsp::IIR::Coefficients<float>::makePeakFilter (
-        currentSampleRate, 750.0, 0.8, // Wider Q for scooped mids
-        juce::jmap (mid, 0.15f, 2.2f) // 0.0 -> 0.15x, 1.0 -> 2.2x
+        currentSampleRate, 800.0, 0.65, // Wider Q (0.65) for more pronounced scoop
+        juce::jmap (mid, 0.08f, 2.4f) // 0.0 -> 0.08x (very scooped), 1.0 -> 2.4x
     );
     *midFilter.coefficients = *midCoeffs;
     
-    // Treble: High shelf at 2500Hz (Rectifier treble control)
+    // Treble: High shelf at 2500Hz - bright and cutting
     auto trebleCoeffs = juce::dsp::IIR::Coefficients<float>::makeHighShelf (
         currentSampleRate, 2500.0, 0.707,
-        juce::jmap (treble, 0.2f, 2.5f) // 0.0 -> 0.2x, 1.0 -> 2.5x
+        juce::jmap (treble, 0.18f, 2.8f) // 0.0 -> 0.18x, 1.0 -> 2.8x (bright)
     );
     *trebleFilter.coefficients = *trebleCoeffs;
     
-    // Presence: High shelf at 5500Hz (affects articulation and high-end clarity)
+    // Presence: High shelf at 5500Hz - articulation and high-end clarity
     auto presenceCoeffs = juce::dsp::IIR::Coefficients<float>::makeHighShelf (
         currentSampleRate, 5500.0, 0.707,
-        juce::jmap (presence, 0.2f, 2.5f) // 0.0 -> 0.2x, 1.0 -> 2.5x
+        juce::jmap (presence, 0.15f, 2.6f) // 0.0 -> 0.15x, 1.0 -> 2.6x
     );
     *presenceFilter.coefficients = *presenceCoeffs;
 }
 
 float GainForgeAudioProcessor::AmpEmulator::applyPreampStage (float input, float stageGain, int stageNumber)
 {
-    // Multiple cascading preamp stages like Triple Rectifier
-    // Each stage adds saturation and harmonics
+    // Triple Rectifier cascading preamp stages - tight, aggressive saturation
+    // Each stage progressively adds more saturation and compression
     float output = input * stageGain;
     
-    // Rectifier-style saturation: asymmetric clipping with more compression
-    // Each stage adds more saturation
-    float saturationAmount = 1.0f + stageNumber * 0.3f;
+    // Rectifier preamp stages: aggressive, tight saturation with harmonic content
+    // Later stages are more compressed and aggressive
+    float saturationAmount = 1.0f + stageNumber * 0.35f;
     
-    // Asymmetric tube saturation (more compression on positive side)
+    // Asymmetric tube saturation (Rectifier style - tight and aggressive)
+    // More compression on positive cycle, creates characteristic Rectifier grind
     if (output > 0.0f)
-        output = std::tanh (output * saturationAmount * 1.5f) * 0.6f;
+        output = std::tanh (output * saturationAmount * 1.8f) * 0.58f; // Tighter, more aggressive
     else
-        output = std::tanh (output * saturationAmount * 1.2f) * 0.7f;
+        output = std::tanh (output * saturationAmount * 1.4f) * 0.65f;
     
     return output;
 }
 
 float GainForgeAudioProcessor::AmpEmulator::applyRectifierSaturation (float input, float drive, float rectifierMode)
 {
-    // Silicon Diode mode (0.0): Tighter, more immediate, less sag
-    // Tube Rectifier mode (1.0): More compressed, saggy, softer attack
+    // Triple Rectifier rectification: Silicon Diode (tight) vs Tube Rectifier (saggy)
+    // Silicon Diode mode (0.0): Tighter, faster attack, more aggressive
+    // Tube Rectifier mode (1.0): Softer attack, more sag, vintage feel
     
-    float driven = input * (1.0f + drive * 12.0f); // Higher gain range for Rectifier
+    float driven = input * (1.0f + drive * 14.0f); // High gain range
     
-    if (rectifierMode < 0.5f) // Silicon Diode mode
+    if (rectifierMode < 0.5f) // Silicon Diode mode - tight and aggressive
     {
-        // Tighter, harder clipping
-        driven = std::tanh (driven * 2.5f) * 0.5f;
+        // Tighter, harder clipping - signature Rectifier tightness
+        driven = std::tanh (driven * 3.0f) * 0.48f; // More aggressive clipping
     }
-    else // Tube Rectifier mode
+    else // Tube Rectifier mode - saggy and compressed
     {
-        // Softer, more compressed with sag simulation
-        // Simulate rectifier sag (voltage drop under load)
-        float sagAmount = std::abs (driven) * 0.15f;
-        rectifierSagState = rectifierSagState * 0.95f + sagAmount * 0.05f;
-        driven *= (1.0f - rectifierSagState * 0.3f); // Voltage sag reduces gain
+        // Simulate rectifier sag (voltage drop under load - characteristic tube rectifier behavior)
+        float sagAmount = std::abs (driven) * 0.18f;
+        rectifierSagState = rectifierSagState * 0.94f + sagAmount * 0.06f; // More sag response
+        driven *= (1.0f - rectifierSagState * 0.35f); // More voltage sag effect
         
-        // Softer tube rectifier saturation
-        driven = std::tanh (driven * 2.0f) * 0.55f;
+        // Softer tube rectifier saturation - more vintage feel
+        driven = std::tanh (driven * 2.2f) * 0.52f;
     }
     
     return driven;
@@ -145,7 +147,8 @@ float GainForgeAudioProcessor::AmpEmulator::applyRectifierSaturation (float inpu
 
 void GainForgeAudioProcessor::AmpEmulator::processBlock (juce::AudioBuffer<float>& buffer, 
                                                           float gain, float bass, float mid, float treble, 
-                                                          float presence, float master, float drive, float rectifierMode)
+                                                          float presence, float master, float drive, float rectifierMode,
+                                                          float voice, float mode)
 {
     if (buffer.getNumSamples() == 0)
         return;
@@ -175,7 +178,8 @@ void GainForgeAudioProcessor::AmpEmulator::processBlock (juce::AudioBuffer<float
         
         // Triple Rectifier gain staging: Multiple cascading preamp stages
         float currentGain = smoothedGain.getNextValue();
-        float gainAmount = 0.2f + currentGain * 14.8f; // 0.2x to 15x (Rectifier has high gain)
+        // Increased gain range: 0.3x to 20x (more headroom for high gain)
+        float gainAmount = 0.3f + currentGain * 19.7f;
         
         // Stage 1: Initial gain boost
         input *= gainAmount * 0.4f;
@@ -197,6 +201,49 @@ void GainForgeAudioProcessor::AmpEmulator::processBlock (juce::AudioBuffer<float
         float currentDrive = smoothedDrive.getNextValue();
         float currentRectifierMode = smoothedRectifierMode.getNextValue();
         input = applyRectifierSaturation (input, currentDrive, currentRectifierMode);
+        
+        // Apply Voice control (Raw/Mid/Mod) - Triple Rectifier channel voicing
+        // Voice: 0.0 = Raw (aggressive, tight, less compression), 
+        //        0.5 = Mid (balanced, classic Rectifier), 
+        //        1.0 = Mod (smooth, modern, more compression)
+        if (voice < 0.25f) // Raw - aggressive, tight, less compressed
+        {
+            // More aggressive, tighter saturation - less compression
+            input = std::tanh (input * 2.1f) * 0.62f; // Tighter, more aggressive
+        }
+        else if (voice < 0.75f) // Mid - balanced, classic Rectifier sound
+        {
+            // Balanced Rectifier tone - slight smoothing
+            input = std::tanh (input * 1.65f) * 0.68f;
+        }
+        else // Mod - smooth, modern, more compressed
+        {
+            // Smoother, more compressed - modern high-gain sound
+            input = std::tanh (input * 1.5f) * 0.72f; // More compression, smoother
+        }
+        
+        // Apply Mode control (Cln/Cru/Mod) - Triple Rectifier mode selection
+        // Mode: 0.0 = Cln (clean, minimal saturation), 
+        //       0.5 = Cru (crunch, moderate gain), 
+        //       1.0 = Mod (modern high gain, maximum saturation)
+        if (mode < 0.25f) // Cln - clean, minimal saturation
+        {
+            // Clean mode - reduce gain significantly, minimal saturation
+            input *= 0.35f; // Much less gain
+            input = std::tanh (input * 1.0f) * 0.9f; // Very light saturation
+        }
+        else if (mode < 0.75f) // Cru - crunch, moderate gain
+        {
+            // Crunch mode - moderate gain boost, classic crunch
+            input *= 1.4f; // Moderate gain boost
+            input = std::tanh (input * 1.6f) * 0.7f; // Classic crunch saturation
+        }
+        else // Mod - modern high gain, maximum saturation
+        {
+            // Modern mode - high gain, aggressive saturation (Triple Rectifier high gain)
+            input *= 1.8f; // High gain boost
+            input = std::tanh (input * 2.3f) * 0.58f; // Aggressive, tight saturation
+        }
         
         channelData[sample] = input;
     }
@@ -243,6 +290,8 @@ GainForgeAudioProcessor::GainForgeAudioProcessor()
     masterParam = apvts.getRawParameterValue("MASTER");
     driveParam = apvts.getRawParameterValue("DRIVE");
     rectifierModeParam = apvts.getRawParameterValue("RECTIFIER_MODE");
+    voiceParam = apvts.getRawParameterValue("VOICE");
+    modeParam = apvts.getRawParameterValue("MODE");
 }
 
 GainForgeAudioProcessor::~GainForgeAudioProcessor()
@@ -371,6 +420,10 @@ void GainForgeAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     float master = masterParam->load();
     float drive = driveParam->load();
     float rectifierMode = rectifierModeParam->load() > 0.5f ? 1.0f : 0.0f; // Convert bool to float
+    
+    // Get voice and mode parameters (AudioParameterChoice returns normalized 0.0-1.0)
+    float voice = voiceParam ? voiceParam->load() : 0.5f; // Default to Mid if not found
+    float mode = modeParam ? modeParam->load() : 1.0f;    // Default to Mod if not found
 
     // Process each channel
     for (int channel = 0; channel < totalNumInputChannels && channel < 2; ++channel)
@@ -380,7 +433,7 @@ void GainForgeAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
         singleChannelBuffer.copyFrom (0, 0, buffer, channel, 0, buffer.getNumSamples());
         
         // Process the channel with amp emulator
-        ampEmulator[channel].processBlock (singleChannelBuffer, gain, bass, mid, treble, presence, master, drive, rectifierMode);
+        ampEmulator[channel].processBlock (singleChannelBuffer, gain, bass, mid, treble, presence, master, drive, rectifierMode, voice, mode);
         
         // Copy processed audio back to main buffer
         buffer.copyFrom (channel, 0, singleChannelBuffer, 0, 0, buffer.getNumSamples());
@@ -421,11 +474,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout GainForgeAudioProcessor::cre
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
 
-    // Gain: 0 to 100%
+    // Gain: 0 to 100% - start at 0.0 for safe loading (professional plugin practice)
     params.push_back (std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID ("GAIN", 1), "Gain",
         juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f),
-        0.5f, "%"
+        0.0f, "%" // Start at 0.0 to prevent loud pops on load
     ));
 
     // Bass: 0 to 100%
@@ -456,11 +509,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout GainForgeAudioProcessor::cre
         0.5f, "%"
     ));
 
-    // Master: 0 to 100%
+    // Master: 0 to 100% - start at 0.0 for safe loading (professional plugin practice)
     params.push_back (std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID ("MASTER", 1), "Master",
         juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f),
-        0.5f, "%"
+        0.0f, "%" // Start at 0.0 to prevent loud pops on load
     ));
 
     // Drive: 0 to 100%
@@ -475,6 +528,20 @@ juce::AudioProcessorValueTreeState::ParameterLayout GainForgeAudioProcessor::cre
         juce::ParameterID ("RECTIFIER_MODE", 1), "Rectifier Mode",
         false, // Default to Silicon (false = 0)
         "" // false = Silicon, true = Tube
+    ));
+
+    // Voice: 3-position (Raw/Mid/Mod) - normalized 0.0, 0.5, 1.0
+    params.push_back (std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID ("VOICE", 1), "Voice",
+        juce::StringArray { "Raw", "Mid", "Mod" },
+        1 // Default to Mid
+    ));
+
+    // Mode: 3-position (Cln/Cru/Mod) - normalized 0.0, 0.5, 1.0
+    params.push_back (std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID ("MODE", 1), "Mode",
+        juce::StringArray { "Cln", "Cru", "Mod" },
+        2 // Default to Mod
     ));
 
     return { params.begin(), params.end() };
