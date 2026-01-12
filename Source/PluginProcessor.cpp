@@ -100,20 +100,20 @@ void GainForgeAudioProcessor::AmpEmulator::updateFilters (float bass, float mid,
 
 float GainForgeAudioProcessor::AmpEmulator::applyPreampStage (float input, float stageGain, int stageNumber)
 {
-    // Triple Rectifier cascading preamp stages - tight, aggressive saturation
+    // Triple Rectifier cascading preamp stages - smoother, more analog saturation
     // Each stage progressively adds more saturation and compression
     float output = input * stageGain;
     
-    // Rectifier preamp stages: aggressive, tight saturation with harmonic content
-    // Later stages are more compressed and aggressive
-    float saturationAmount = 1.0f + stageNumber * 0.35f;
+    // Rectifier preamp stages: smoother saturation with harmonic content
+    // Later stages are more compressed but still smooth
+    float saturationAmount = 0.8f + stageNumber * 0.25f; // Reduced from 0.35f
     
-    // Asymmetric tube saturation (Rectifier style - tight and aggressive)
-    // More compression on positive cycle, creates characteristic Rectifier grind
+    // Softer asymmetric tube saturation (more analog-like)
+    // Gentle asymmetric clipping for warmth
     if (output > 0.0f)
-        output = std::tanh (output * saturationAmount * 1.8f) * 0.58f; // Tighter, more aggressive
+        output = std::tanh (output * saturationAmount * 1.3f) * 0.75f; // Softer, warmer
     else
-        output = std::tanh (output * saturationAmount * 1.4f) * 0.65f;
+        output = std::tanh (output * saturationAmount * 1.1f) * 0.80f; // Softer negative cycle
     
     return output;
 }
@@ -124,22 +124,22 @@ float GainForgeAudioProcessor::AmpEmulator::applyRectifierSaturation (float inpu
     // Silicon Diode mode (0.0): Tighter, faster attack, more aggressive
     // Tube Rectifier mode (1.0): Softer attack, more sag, vintage feel
     
-    float driven = input * (1.0f + drive * 14.0f); // High gain range
+    float driven = input * (1.0f + drive * 10.0f); // Reduced from 14.0f for softer response
     
-    if (rectifierMode < 0.5f) // Silicon Diode mode - tight and aggressive
+    if (rectifierMode < 0.5f) // Silicon Diode mode - tight but smoother
     {
-        // Tighter, harder clipping - signature Rectifier tightness
-        driven = std::tanh (driven * 3.0f) * 0.48f; // More aggressive clipping
+        // Tighter clipping but with softer curve
+        driven = std::tanh (driven * 2.0f) * 0.70f; // Softer clipping, higher output
     }
     else // Tube Rectifier mode - saggy and compressed
     {
         // Simulate rectifier sag (voltage drop under load - characteristic tube rectifier behavior)
-        float sagAmount = std::abs (driven) * 0.18f;
+        float sagAmount = std::abs (driven) * 0.15f;
         rectifierSagState = rectifierSagState * 0.94f + sagAmount * 0.06f; // More sag response
-        driven *= (1.0f - rectifierSagState * 0.35f); // More voltage sag effect
+        driven *= (1.0f - rectifierSagState * 0.30f); // More voltage sag effect
         
         // Softer tube rectifier saturation - more vintage feel
-        driven = std::tanh (driven * 2.2f) * 0.52f;
+        driven = std::tanh (driven * 1.6f) * 0.75f; // Softer, warmer
     }
     
     return driven;
@@ -175,74 +175,80 @@ void GainForgeAudioProcessor::AmpEmulator::processBlock (juce::AudioBuffer<float
     for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
     {
         float input = channelData[sample];
+        float currentMode = mode; // Use current mode value
         
-        // Triple Rectifier gain staging: Multiple cascading preamp stages
-        float currentGain = smoothedGain.getNextValue();
-        // Increased gain range: 0.3x to 20x (more headroom for high gain)
-        float gainAmount = 0.3f + currentGain * 19.7f;
-        
-        // Stage 1: Initial gain boost
-        input *= gainAmount * 0.4f;
-        input = applyPreampStage (input, 1.0f, 1);
-        
-        // Stage 2: Second gain stage
-        input *= gainAmount * 0.6f;
-        input = applyPreampStage (input, 1.0f, 2);
-        
-        // Stage 3: Third gain stage (high gain)
-        input *= gainAmount * 0.8f;
-        input = applyPreampStage (input, 1.0f, 3);
-        
-        // Stage 4: Final preamp stage
-        input *= gainAmount;
-        input = applyPreampStage (input, 1.0f, 4);
-        
-        // Apply rectifier saturation (after preamp, before tone stack)
-        float currentDrive = smoothedDrive.getNextValue();
-        float currentRectifierMode = smoothedRectifierMode.getNextValue();
-        input = applyRectifierSaturation (input, currentDrive, currentRectifierMode);
-        
-        // Apply Voice control (Raw/Mid/Mod) - Triple Rectifier channel voicing
-        // Voice: 0.0 = Raw (aggressive, tight, less compression), 
-        //        0.5 = Mid (balanced, classic Rectifier), 
-        //        1.0 = Mod (smooth, modern, more compression)
-        if (voice < 0.25f) // Raw - aggressive, tight, less compressed
+        // Apply Mode control EARLY - Clean mode bypasses most saturation
+        if (currentMode < 0.25f) // Cln - clean, minimal saturation
         {
-            // More aggressive, tighter saturation - less compression
-            input = std::tanh (input * 2.1f) * 0.62f; // Tighter, more aggressive
+            // Clean mode - bypass saturation stages, just gentle gain boost
+            float currentGain = smoothedGain.getNextValue();
+            float gainAmount = 0.8f + currentGain * 2.2f; // Gentle 0.8x to 3.0x range
+            input *= gainAmount;
+            // Very gentle saturation - almost transparent
+            input = std::tanh (input * 0.8f) * 1.0f;
+            // Bypass all other processing stages for clean sound
         }
-        else if (voice < 0.75f) // Mid - balanced, classic Rectifier sound
+        else
         {
-            // Balanced Rectifier tone - slight smoothing
-            input = std::tanh (input * 1.65f) * 0.68f;
-        }
-        else // Mod - smooth, modern, more compressed
-        {
-            // Smoother, more compressed - modern high-gain sound
-            input = std::tanh (input * 1.5f) * 0.72f; // More compression, smoother
-        }
-        
-        // Apply Mode control (Cln/Cru/Mod) - Triple Rectifier mode selection
-        // Mode: 0.0 = Cln (clean, minimal saturation), 
-        //       0.5 = Cru (crunch, moderate gain), 
-        //       1.0 = Mod (modern high gain, maximum saturation)
-        if (mode < 0.25f) // Cln - clean, minimal saturation
-        {
-            // Clean mode - reduce gain significantly, minimal saturation
-            input *= 0.35f; // Much less gain
-            input = std::tanh (input * 1.0f) * 0.9f; // Very light saturation
-        }
-        else if (mode < 0.75f) // Cru - crunch, moderate gain
-        {
-            // Crunch mode - moderate gain boost, classic crunch
-            input *= 1.4f; // Moderate gain boost
-            input = std::tanh (input * 1.6f) * 0.7f; // Classic crunch saturation
-        }
-        else // Mod - modern high gain, maximum saturation
-        {
-            // Modern mode - high gain, aggressive saturation (Triple Rectifier high gain)
-            input *= 1.8f; // High gain boost
-            input = std::tanh (input * 2.3f) * 0.58f; // Aggressive, tight saturation
+            // Crunch and Modern modes - apply full preamp processing
+            float currentGain = smoothedGain.getNextValue();
+            // More reasonable gain range: 1.0x to 12x (less harsh)
+            float gainAmount = 1.0f + currentGain * 11.0f;
+            
+            // Stage 1: Initial gain boost
+            input *= gainAmount * 0.3f;
+            input = applyPreampStage (input, 1.0f, 1);
+            
+            // Stage 2: Second gain stage
+            input *= gainAmount * 0.4f;
+            input = applyPreampStage (input, 1.0f, 2);
+            
+            // Stage 3: Third gain stage (high gain)
+            input *= gainAmount * 0.5f;
+            input = applyPreampStage (input, 1.0f, 3);
+            
+            // Stage 4: Final preamp stage
+            input *= gainAmount * 0.6f;
+            input = applyPreampStage (input, 1.0f, 4);
+            
+            // Apply rectifier saturation (after preamp, before tone stack)
+            float currentDrive = smoothedDrive.getNextValue();
+            float currentRectifierMode = smoothedRectifierMode.getNextValue();
+            input = applyRectifierSaturation (input, currentDrive, currentRectifierMode);
+            
+            // Apply Voice control (Raw/Mid/Mod) - Triple Rectifier channel voicing
+            // Voice: 0.0 = Raw (aggressive, tight, less compression), 
+            //        0.5 = Mid (balanced, classic Rectifier), 
+            //        1.0 = Mod (smooth, modern, more compression)
+            if (voice < 0.25f) // Raw - aggressive, tight, less compressed
+            {
+                // More aggressive, tighter saturation - less compression
+                input = std::tanh (input * 1.6f) * 0.75f; // Softer than before
+            }
+            else if (voice < 0.75f) // Mid - balanced, classic Rectifier sound
+            {
+                // Balanced Rectifier tone - slight smoothing
+                input = std::tanh (input * 1.3f) * 0.80f; // Softer, warmer
+            }
+            else // Mod - smooth, modern, more compressed
+            {
+                // Smoother, more compressed - modern high-gain sound
+                input = std::tanh (input * 1.2f) * 0.85f; // Softer, more compressed
+            }
+            
+            // Apply Mode control for Crunch vs Modern
+            if (currentMode < 0.75f) // Cru - crunch, moderate gain
+            {
+                // Crunch mode - moderate gain boost, classic crunch
+                input *= 1.2f; // Moderate gain boost
+                input = std::tanh (input * 1.1f) * 0.85f; // Classic crunch saturation
+            }
+            else // Mod - modern high gain, maximum saturation
+            {
+                // Modern mode - high gain, but softer saturation
+                input *= 1.4f; // High gain boost
+                input = std::tanh (input * 1.4f) * 0.75f; // Softer saturation
+            }
         }
         
         channelData[sample] = input;
@@ -260,8 +266,8 @@ void GainForgeAudioProcessor::AmpEmulator::processBlock (juce::AudioBuffer<float
         float currentMaster = smoothedMaster.getNextValue();
         channelData[sample] *= (0.15f + currentMaster * 11.85f); // 0.15x to 12x (Rectifier master)
         
-        // Final soft clipping to prevent harsh digital distortion
-        channelData[sample] = juce::jlimit (-0.95f, 0.95f, channelData[sample]);
+        // Final soft clipping to prevent harsh digital distortion (gentler)
+        channelData[sample] = juce::jlimit (-0.98f, 0.98f, channelData[sample]);
     }
 }
 
