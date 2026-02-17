@@ -4,7 +4,9 @@
               addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1" cppLanguageStandard="17"
               pluginChannelConfigs="{2, 2}" companyWebsite="www.example.com"
               companyName="CK Audio Design" companyCopyright="2025" pluginManufacturerCode="CKAD"
-              pluginCode="Gain" pluginName="GAINFORGE" pluginDesc="Mesa Boogie Triple Rectifier Emulator">
+              pluginCode="Gain" pluginName="GAINFORGE" pluginDesc="Mesa Boogie Triple Rectifier Emulator"
+              pluginFormats="buildVST3,buildAU,buildAAX,buildStandalone"
+              aaxIdentifier="com.ckaudiodesign.gainforge">
   <MAINGROUP id="jXVMvd" name="GAINFORGE">
     <GROUP id="{9599FCC3-1EB7-A668-23ED-93BE4AF42C8A}" name="Source">
       <FILE id="gYswd1" name="PluginProcessor.cpp" compile="1" resource="0"
