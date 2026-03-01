@@ -111,7 +111,7 @@ private:
         
         double currentSampleRate = 44100.0;
         
-        void updateFilters (float bass, float mid, float treble, float presence);
+        void updateFilters (float bass, float mid, float treble, float presence, float mode);
         float applyRectifierSaturation (float input, float drive, float rectifierMode);
         float applyPreampStage (float input, float stageGain, int stageNumber);
     };
